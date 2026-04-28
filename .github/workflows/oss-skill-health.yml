@@ -28,7 +28,7 @@ on:
       ai_model:
         required: false
         type: string
-        default: "gpt-4o-mini"
+        default: "gpt-4o"
         # GitHub Models model ID. See https://github.com/marketplace/models
       tracked_deps:
         required: false
