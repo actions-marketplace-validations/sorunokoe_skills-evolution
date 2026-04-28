@@ -8,7 +8,7 @@ name: OSS Skill Health
 #     workflow_dispatch:
 #   jobs:
 #     health:
-#       uses: sorunokoe/skills-evolution/.github/workflows/oss_skill_health.yml@main
+#       uses: sorunokoe/skills-evolution/.github/workflows/oss-skill-health.yml@main
 #       secrets:
 #         github_token: ${{ secrets.GITHUB_TOKEN }}
 #
