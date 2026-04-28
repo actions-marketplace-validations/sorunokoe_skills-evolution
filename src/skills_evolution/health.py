@@ -817,6 +817,24 @@ def analyze_feedback(raw_path: Path, repo_root: Path, output_dir: Path) -> int:
 	return len(proposals)
 
 
+def _key_change(old: str, new: str, max_len: int = 50) -> tuple[str, str]:
+	"""Extract the minimal differing fragment so PR tables stay compact."""
+	i = 0
+	while i < len(old) and i < len(new) and old[i] == new[i]:
+		i += 1
+	j_old, j_new = len(old), len(new)
+	while j_old > i and j_new > i and old[j_old - 1] == new[j_new - 1]:
+		j_old -= 1
+		j_new -= 1
+	fragment_old = old[i:j_old].strip() or old.strip()
+	fragment_new = new[i:j_new].strip() or new.strip()
+	if len(fragment_old) > max_len:
+		fragment_old = fragment_old[:max_len] + "…"
+	if len(fragment_new) > max_len:
+		fragment_new = fragment_new[:max_len] + "…"
+	return fragment_old, fragment_new
+
+
 def combine_reports(output_dir: Path) -> tuple[int, int]:
 	audit_path = output_dir / "skills-audit.json"
 	feedback_path = output_dir / "skills-feedback.json"
@@ -846,45 +864,49 @@ def combine_reports(output_dir: Path) -> tuple[int, int]:
 	findings_count += ai_patches_applied
 	now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
-	lines = [f"🤖 Monthly skill health check — {now}", ""]
+	patch_word = "patch" if ai_patches_applied == 1 else "patches"
+	structural_count = findings_count - ai_patches_applied
 
-	# --- AI patches: show the actual diffs so the reviewer can judge ---
+	# ── Header ──────────────────────────────────────────────────────────────
+	lines = [
+		f"🤖 **Skill health** — {now}",
+		"",
+	]
+
+	# ── AI version patches: compact table ───────────────────────────────────
 	if ai_updates_enabled and ai_patches_applied > 0:
-		patch_word = "patch" if ai_patches_applied == 1 else "patches"
 		lines += [
-			f"## {ai_patches_applied} version {patch_word} applied across {ai_skills_changed} file(s)",
+			f"**{ai_patches_applied} version {patch_word}** · sourced from live GitHub releases",
 			"",
-			"Versions are fetched live from GitHub releases — no training-data guesses.",
-			"",
+			"| File | Before → After |",
+			"|------|----------------|",
 		]
 		for entry in ai_updates.get("by_skill", []):
 			if entry.get("applied", 0) == 0:
 				continue
 			label = entry.get("file") or entry.get("skill", "?")
 			applied_patches = [p for p in entry.get("patches", []) if p.get("_status") == "applied"]
-			lines.append(f"### `{label}`")
-			lines.append("")
 			if applied_patches:
 				for p in applied_patches:
-					reason = p.get("reason", "").strip()
-					lines.append(f"- {reason}" if reason else "- version bump")
-				lines.append("")
+					old_frag, new_frag = _key_change(
+						p.get("old_text", "").strip(),
+						p.get("new_text", "").strip(),
+					)
+					lines.append(f"| `{label}` | `{old_frag}` → `{new_frag}` |")
 			else:
-				lines += [f"_{entry.get('applied', 0)} patch(es) applied — see Files changed tab._", ""]
+				lines.append(f"| `{label}` | _{entry.get('applied', 0)} change(s) — see Files changed_ |")
+		lines += ["", "> Full diff in the **Files changed** tab above.", ""]
 
-	# --- Structural findings ---
-	structural_count = findings_count - ai_patches_applied
+	# ── Structural findings ──────────────────────────────────────────────────
 	if structural_count > 0:
 		lines += [
-			"## Structural findings",
-			"",
-			f"{structural_count} issue(s) found — see `skills-audit.md` in the run artifacts for details.",
+			f"**{structural_count} structural issue(s)** · details in `skills-audit.md` run artifact",
 			"",
 		]
 
-	# --- Content-level findings (optional Copilot step) ---
+	# ── Content-level findings (optional Copilot step) ───────────────────────
 	if semantic_findings_count:
-		lines += ["## Content findings (Copilot review)", ""]
+		lines += ["**Content findings** (Copilot review)", ""]
 		for item in semantic.get("content_findings", [])[:5]:
 			file_path = item.get("file", "unknown")
 			issue = item.get("issue_type", "CONTENT_ACCURACY")
@@ -894,16 +916,17 @@ def combine_reports(output_dir: Path) -> tuple[int, int]:
 				span = f":{item.get('line_start')}"
 				if item.get("line_end") and item.get("line_end") != item.get("line_start"):
 					span += f"-{item.get('line_end')}"
-			lines.append(f"- **{issue}** in `{file_path}{span}` — {evidence}")
+			lines.append(f"- **{issue}** `{file_path}{span}` — {evidence}")
 		lines.append("")
 
-	# --- Nothing to show ---
+	# ── Nothing to show ──────────────────────────────────────────────────────
 	if findings_count == 0:
-		lines += ["_Nothing to fix this month. The skills are in great shape! 🎉_", ""]
+		lines += ["_Nothing to fix this month — skills are looking sharp 🎉_", ""]
 
+	# ── Footer ───────────────────────────────────────────────────────────────
 	lines += [
 		"---",
-		"_Review each diff above. If something looks wrong, close this PR — the bot runs again next month._",
+		"Merge ✅ if it looks right · Close ❌ if something's off — bot reruns next month",
 	]
 	write_text(output_dir / "skills-health-summary.md", "\n".join(lines) + "\n")
 	return findings_count, proposal_count
