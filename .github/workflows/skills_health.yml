@@ -1,4 +1,4 @@
-name: Skills Health (Reusable)
+name: Skills Health
 # Reusable workflow — the consumer's wrapper defines when this runs.
 # Example wrapper trigger:
 #   on:

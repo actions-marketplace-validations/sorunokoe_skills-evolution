@@ -1,4 +1,4 @@
-name: Skills Trace Fallback Capture (Reusable)
+name: Skills Trace Fallback Capture
 
 on:
   workflow_call:
