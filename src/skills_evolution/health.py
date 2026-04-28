@@ -132,7 +132,16 @@ def parse_frontmatter(content: str) -> tuple[dict[str, str], int | None, int | N
 
 
 def iter_skill_files(repo_root: Path) -> list[Path]:
-	return sorted((repo_root / ".github" / "skills").glob("*/SKILL.md"))
+	"""Return SKILL.md paths from .github/skills/ and .claude/skills/, deduplicating by skill name."""
+	seen: set[str] = set()
+	result: list[Path] = []
+	for base_dir in [repo_root / ".github" / "skills", repo_root / ".claude" / "skills"]:
+		for skill_file in sorted(base_dir.glob("*/SKILL.md")):
+			name = skill_file.parent.name
+			if name not in seen:
+				seen.add(name)
+				result.append(skill_file)
+	return result
 
 
 def iter_markdown_files(skill_dir: Path) -> list[Path]:

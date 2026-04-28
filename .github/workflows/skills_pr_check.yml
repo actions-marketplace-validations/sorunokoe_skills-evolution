@@ -1,0 +1,146 @@
+name: Skills PR Check
+
+on:
+  workflow_call:
+    inputs:
+      tools_ref:
+        description: "Tag or branch of skills-evolution to checkout for tooling (e.g. v0.1.3)"
+        required: false
+        default: "main"
+        type: string
+    secrets:
+      copilot_token:
+        description: "GitHub Copilot token (COPILOT_TOKEN)"
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  skills-pr-check:
+    name: Skill file review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.actor != 'trackman-renovate[bot]' && github.actor != 'trackman-bot[bot]'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find changed skill files
+        id: changed
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
+          BASE=origin/${{ github.event.pull_request.base.ref }}
+          FILES=$(git diff --name-only "$BASE"...HEAD -- '.github/skills/*/SKILL.md' '.claude/skills/*/SKILL.md' | tr '\n' ' ')
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo $FILES | wc -w)" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if no skill files changed
+        if: steps.changed.outputs.count == '0'
+        run: echo "No SKILL.md files changed — skipping review."
+
+      - name: Checkout skills-evolution tooling
+        if: steps.changed.outputs.count != '0'
+        uses: actions/checkout@v4
+        with:
+          repository: sorunokoe/skills-evolution
+          ref: ${{ inputs.tools_ref }}
+          path: .skills-evolution
+
+      - name: Set up Python
+        if: steps.changed.outputs.count != '0'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install skills-evolution
+        if: steps.changed.outputs.count != '0'
+        run: pip install .skills-evolution/
+
+      - name: Audit changed skill files
+        if: steps.changed.outputs.count != '0'
+        id: audit
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.skills-evolution/src
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+        run: |
+          python3 -m skills_evolution.health audit \
+            --repo-root "${{ github.workspace }}" \
+            --output-dir /tmp/skills-pr-output
+          echo "findings=$(jq '.findings_count // 0' /tmp/skills-pr-output/skills-health.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        if: steps.changed.outputs.count != '0'
+        uses: actions/setup-node@v4
+
+      - name: Install Copilot CLI
+        if: steps.changed.outputs.count != '0'
+        run: npm install -g @github/copilot@1.0.7
+
+      - name: Review changed skills with Copilot
+        if: steps.changed.outputs.count != '0'
+        id: review
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.copilot_token }}
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Build context: list changed files and their content
+          SKILL_CONTEXT=""
+          for f in $CHANGED_FILES; do
+            if [ -f "$f" ]; then
+              SKILL_CONTEXT+="
+
+          ### $f
+          \`\`\`markdown
+          $(head -n 80 "$f")
+          \`\`\`"
+            fi
+          done
+
+          PROMPT="You are reviewing skill guidance files for a software team using Swift 6.2, SwiftUI, TCA, Kotlin Multiplatform, and Jetpack Compose.
+
+          Review the following changed skill file(s) for:
+          1. Accuracy — does the guidance reflect current library best practices?
+          2. Clarity — are instructions actionable and unambiguous?
+          3. Scope — is the 'When to use' section precise (not too broad or narrow)?
+          4. Anti-patterns — are common mistakes clearly listed?
+
+          Be concise. If everything looks good, say so. Only flag genuine issues.
+          $SKILL_CONTEXT"
+
+          if REVIEW=$(copilot -p "$PROMPT" --no-ask-user 2>/tmp/copilot-error.txt); then
+            RESULT="$REVIEW"
+          else
+            RESULT="⚠️ Copilot review unavailable: $(cat /tmp/copilot-error.txt)"
+          fi
+
+          {
+            echo "result<<EOF_REVIEW"
+            echo "$RESULT"
+            echo "EOF_REVIEW"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post review comment
+        if: steps.changed.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          AUDIT_FINDINGS: ${{ steps.audit.outputs.findings }}
+          COPILOT_REVIEW: ${{ steps.review.outputs.result }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          BODY="## 🧠 Skill File Review
+
+          **Changed files:** \`$CHANGED_FILES\`
+          **Structural findings:** $AUDIT_FINDINGS
+
+          ### Copilot Review
+          $COPILOT_REVIEW
+
+          ---
+          _Automated review by [skills-evolution](https://github.com/sorunokoe/skills-evolution)_"
+
+          gh pr comment "$PR_NUMBER" --body "$BODY" --repo "${{ github.repository }}"
