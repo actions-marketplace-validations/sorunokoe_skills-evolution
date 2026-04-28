@@ -232,5 +232,203 @@ class OssAuditModeTests(unittest.TestCase):
 			self.assertTrue(any(f["skill"] for f in audit["findings"]))
 
 
+class SkillQualityChecksTests(unittest.TestCase):
+	"""Tests for SKILL_TOO_LONG, agent optimization, and contradiction detection."""
+
+	def _make_valid_skill_content(self, extra: str = "") -> str:
+		"""Minimal valid SKILL.md with routing section + code example."""
+		return (
+			"---\nname: my-skill\ndescription: test\napplyTo: '**/*.swift'\n---\n"
+			"# My Skill\n\n## Reference Router\n\n| Task | File |\n|------|------|\n\n"
+			"```swift\nfoo()\n```\n" + extra
+		)
+
+	# ── SKILL_TOO_LONG ──────────────────────────────────────────────────────
+
+	def test_skill_too_long_emits_warning(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			skill_file.write_text("\n".join(["line"] * 301), encoding="utf-8")
+			findings = health._check_skill_length(skill_file, root, "my-skill", 301)
+			self.assertEqual(len(findings), 1)
+			self.assertEqual(findings[0].type, "SKILL_TOO_LONG")
+			self.assertEqual(findings[0].severity, "warning")
+
+	def test_skill_within_limit_no_finding(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			skill_file.write_text("\n".join(["line"] * 100), encoding="utf-8")
+			findings = health._check_skill_length(skill_file, root, "my-skill", 100)
+			self.assertEqual(findings, [])
+
+	def test_skill_exactly_at_limit_no_finding(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			skill_file.write_text("\n".join(["line"] * 300), encoding="utf-8")
+			findings = health._check_skill_length(skill_file, root, "my-skill", 300)
+			self.assertEqual(findings, [])
+
+	# ── Agent optimization checks ───────────────────────────────────────────
+
+	def test_stub_skill_skips_optimization_checks(self) -> None:
+		"""Frontmatter-only files should not trigger NO_ROUTING_SECTION."""
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			content = "---\nname: my-skill\ndescription: test\napplyTo: '**/*.swift'\n---\n"
+			skill_file.write_text(content, encoding="utf-8")
+			findings = health._check_agent_optimization(skill_file, content, root, "my-skill")
+			self.assertEqual(findings, [])
+
+	def test_no_routing_section_emits_warning(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			content = "---\nname: my-skill\ndescription: test\napplyTo: '**/*.swift'\n---\n# My Skill\n\n❌ `BadAPI`\n\n```swift\nfoo()\n```\n"
+			skill_file.write_text(content, encoding="utf-8")
+			findings = health._check_agent_optimization(skill_file, content, root, "my-skill")
+			types = {f.type for f in findings}
+			self.assertIn("NO_ROUTING_SECTION", types)
+
+	def test_routing_section_present_no_finding(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			content = self._make_valid_skill_content()
+			skill_file.write_text(content, encoding="utf-8")
+			findings = health._check_agent_optimization(skill_file, content, root, "my-skill")
+			types = {f.type for f in findings}
+			self.assertNotIn("NO_ROUTING_SECTION", types)
+
+	def test_rules_without_examples_emits_warning(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			# Has routing, has rules, but NO code fence
+			content = "---\nname: my-skill\ndescription: x\napplyTo: '**'\n---\n# A\n\n## Reference Router\n\n❌ Never do X\n✅ Do Y\n"
+			skill_file.write_text(content, encoding="utf-8")
+			findings = health._check_agent_optimization(skill_file, content, root, "my-skill")
+			types = {f.type for f in findings}
+			self.assertIn("RULES_WITHOUT_EXAMPLES", types)
+
+	def test_rules_with_examples_no_finding(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			content = self._make_valid_skill_content("❌ Bad\n")
+			skill_file.write_text(content, encoding="utf-8")
+			findings = health._check_agent_optimization(skill_file, content, root, "my-skill")
+			types = {f.type for f in findings}
+			self.assertNotIn("RULES_WITHOUT_EXAMPLES", types)
+
+	def test_deep_heading_nesting_emits_info(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			content = self._make_valid_skill_content("#### Deep section\n")
+			skill_file.write_text(content, encoding="utf-8")
+			findings = health._check_agent_optimization(skill_file, content, root, "my-skill")
+			types = {f.type for f in findings}
+			self.assertIn("DEEP_HEADING_NESTING", types)
+
+	# ── Contradiction detection ─────────────────────────────────────────────
+
+	def test_contradicting_rules_across_files_detected(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			file_a = root / "SKILL.md"
+			file_b = root / "ref.md"
+			file_a.write_text("# A\n\n❌ `SomeAPI` is forbidden\n", encoding="utf-8")
+			file_b.write_text("# B\n\n✅ `SomeAPI` is recommended\n", encoding="utf-8")
+			pairs = [(file_a, file_a.read_text()), (file_b, file_b.read_text())]
+			findings = health._check_contradictions(pairs, root, "my-skill")
+			self.assertEqual(len(findings), 1)
+			self.assertEqual(findings[0].type, "CONTRADICTING_RULES")
+			self.assertIn("someapi", findings[0].message)
+
+	def test_no_contradiction_same_file_before_after(self) -> None:
+		"""❌ then ✅ of the same term in one file is a before/after example, not a contradiction."""
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			skill_file = root / "SKILL.md"
+			skill_file.write_text("# A\n\n❌ `SomeAPI` bad way\n✅ `SomeAPI` good way\n", encoding="utf-8")
+			pairs = [(skill_file, skill_file.read_text())]
+			findings = health._check_contradictions(pairs, root, "my-skill")
+			self.assertEqual(findings, [])
+
+	def test_no_contradiction_when_consistent(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			file_a = root / "SKILL.md"
+			file_b = root / "ref.md"
+			file_a.write_text("# A\n\n❌ `BadAPI`\n", encoding="utf-8")
+			file_b.write_text("# B\n\n✅ `GoodAPI`\n", encoding="utf-8")
+			pairs = [(file_a, file_a.read_text()), (file_b, file_b.read_text())]
+			findings = health._check_contradictions(pairs, root, "my-skill")
+			self.assertEqual(findings, [])
+
+	def test_contradiction_inside_code_fence_ignored(self) -> None:
+		"""❌/✅ inside fenced code blocks must not be treated as normative rules."""
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			file_a = root / "SKILL.md"
+			file_b = root / "ref.md"
+			# ❌ `SomeAPI` is INSIDE a code fence — should not count
+			file_a.write_text("# A\n\n```\n// ❌ `SomeAPI` avoid this\n```\n", encoding="utf-8")
+			file_b.write_text("# B\n\n✅ `SomeAPI` use this\n", encoding="utf-8")
+			pairs = [(file_a, file_a.read_text()), (file_b, file_b.read_text())]
+			findings = health._check_contradictions(pairs, root, "my-skill")
+			self.assertEqual(findings, [])
+
+	def test_one_finding_per_term_not_per_file_pair(self) -> None:
+		"""Multiple files preferring a term that one file bans → single finding."""
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			file_a = root / "SKILL.md"
+			file_b = root / "ref1.md"
+			file_c = root / "ref2.md"
+			file_a.write_text("# A\n\n❌ `SomeAPI`\n", encoding="utf-8")
+			file_b.write_text("# B\n\n✅ `SomeAPI`\n", encoding="utf-8")
+			file_c.write_text("# C\n\n✅ `SomeAPI`\n", encoding="utf-8")
+			pairs = [(f, f.read_text()) for f in [file_a, file_b, file_c]]
+			findings = health._check_contradictions(pairs, root, "my-skill")
+			contradiction_findings = [f for f in findings if f.type == "CONTRADICTING_RULES"]
+			self.assertEqual(len(contradiction_findings), 1)
+
+	# ── Integration: audit_skills picks up new checks ───────────────────────
+
+	def test_audit_oss_skill_too_long_emits_finding(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			output = root / "out"
+			output.mkdir()
+			long_content = "---\nname: my-skill\ndescription: x\napplyTo: '**'\n---\n" + "\n".join(["line"] * 300)
+			(root / "SKILL.md").write_text(long_content, encoding="utf-8")
+			count = health.audit_skills(root, output, apply_autofix=False, oss=True)
+			audit = json.loads((output / "skills-audit.json").read_text(encoding="utf-8"))
+			types = [f["type"] for f in audit["findings"]]
+			self.assertIn("SKILL_TOO_LONG", types)
+
+	def test_audit_oss_contradiction_emits_finding(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			output = root / "out"
+			output.mkdir()
+			(root / "SKILL.md").write_text(
+				"---\nname: my-skill\ndescription: x\napplyTo: '**'\n---\n# A\n\n❌ `SomeAPI`\n",
+				encoding="utf-8",
+			)
+			refs = root / "references"
+			refs.mkdir()
+			(refs / "details.md").write_text("# B\n\n✅ `SomeAPI`\n", encoding="utf-8")
+			count = health.audit_skills(root, output, apply_autofix=False, oss=True)
+			audit = json.loads((output / "skills-audit.json").read_text(encoding="utf-8"))
+			types = [f["type"] for f in audit["findings"]]
+			self.assertIn("CONTRADICTING_RULES", types)
+
+
 if __name__ == "__main__":
 	unittest.main()

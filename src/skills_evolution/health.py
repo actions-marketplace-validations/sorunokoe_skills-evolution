@@ -65,6 +65,20 @@ _COMMENT_FIX_HINTS = (
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _WHITESPACE_RE = re.compile(r"\s+")
 
+# ── Skill-quality checks ────────────────────────────────────────────────────
+_SKILL_MD_LINE_LIMIT = 300
+_REF_MD_LINE_LIMIT = 400
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+_CODE_FENCE_RE = re.compile(r"^```", re.MULTILINE)
+_CODE_FENCE_BLOCK_RE = re.compile(r"```.*?```", re.DOTALL)
+_RULE_MARKER_RE = re.compile(r"[❌✅]")
+# Only backtick terms 5–60 chars to reduce noise (skip short tokens & long snippets)
+_BACKTICK_TERM_RE = re.compile(r"`([^`\n]{5,60})`")
+_FORBIDDEN_MARKER_RE = re.compile(r"^❌\s*(.*)", re.MULTILINE)
+_PREFERRED_MARKER_RE = re.compile(r"^✅\s*(.*)", re.MULTILINE)
+_ROUTING_KW = ("router", "route", "when to", "reference", "which file", "which ref", "load order", "applyto")
+
 
 @dataclass
 class Finding:
@@ -240,6 +254,162 @@ def local_link_target(md_file: Path, link: str) -> tuple[Path | None, str | None
 	return (md_file.parent / path_part).resolve(), fragment
 
 
+def _has_meaningful_body(content: str) -> bool:
+	"""Return True if the file has any non-frontmatter content (not a stub)."""
+	m = FRONTMATTER_RE.match(content)
+	body = content[m.end() :].strip() if m else content.strip()
+	return bool(body)
+
+
+def _check_skill_length(
+	skill_file: Path,
+	repo_root: Path,
+	effective_skill: str,
+	skill_line_count: int,
+) -> list[Finding]:
+	"""Warn if SKILL.md exceeds the recommended line limit for AI agent instructions."""
+	if skill_line_count <= _SKILL_MD_LINE_LIMIT:
+		return []
+	return [
+		Finding(
+			type="SKILL_TOO_LONG",
+			severity="warning",
+			skill=effective_skill,
+			file=str(skill_file.relative_to(repo_root)),
+			message=(
+				f"SKILL.md is {skill_line_count} lines (limit: {_SKILL_MD_LINE_LIMIT}). "
+				"Claude and Copilot perform best with concise instructions — split detail into "
+				"references/ files loaded on demand."
+			),
+			suggestion=f"Target ≤{_SKILL_MD_LINE_LIMIT} lines. Move deep examples to references/.",
+		)
+	]
+
+
+def _check_agent_optimization(
+	skill_file: Path,
+	content: str,
+	repo_root: Path,
+	effective_skill: str,
+) -> list[Finding]:
+	"""Check SKILL.md against Claude/Copilot best practices for AI agent instructions."""
+	if not _has_meaningful_body(content):
+		return []  # stub/frontmatter-only file — nothing to evaluate yet
+
+	findings: list[Finding] = []
+	rel = str(skill_file.relative_to(repo_root))
+	headings = _HEADING_RE.findall(content)
+	heading_lower = [h[1].lower() for h in headings]
+
+	has_routing = any(any(kw in ht for kw in _ROUTING_KW) for ht in heading_lower)
+	if not has_routing:
+		findings.append(
+			Finding(
+				type="NO_ROUTING_SECTION",
+				severity="warning",
+				skill=effective_skill,
+				file=rel,
+				message=(
+					"SKILL.md has no routing section. AI agents (Claude, Copilot) need an explicit "
+					"'Reference Router' or 'When to use' heading to know which file to load for a task."
+				),
+				suggestion="Add a '## Reference Router' table mapping task types → references/*.md files.",
+			)
+		)
+
+	has_rules = bool(_RULE_MARKER_RE.search(content))
+	has_code = bool(_CODE_FENCE_RE.search(content))
+	if has_rules and not has_code:
+		findings.append(
+			Finding(
+				type="RULES_WITHOUT_EXAMPLES",
+				severity="warning",
+				skill=effective_skill,
+				file=rel,
+				message=(
+					"SKILL.md has ❌/✅ rules but no code examples. "
+					"Both Claude and GitHub Copilot guidelines recommend 1–3 concise examples alongside rules."
+				),
+			)
+		)
+
+	deep = [h[1] for h in headings if len(h[0]) >= 4]
+	if deep:
+		findings.append(
+			Finding(
+				type="DEEP_HEADING_NESTING",
+				severity="info",
+				skill=effective_skill,
+				file=rel,
+				message=(
+					f"SKILL.md uses {len(deep)} H4+ heading(s). "
+					"Deeply nested sections reduce scannability for AI agents — prefer H2/H3 maximum."
+				),
+			)
+		)
+
+	return findings
+
+
+def _extract_marked_terms(prose: str, marker_re: re.Pattern) -> set[str]:
+	"""Extract backtick terms from lines that start with ❌ or ✅ (in prose, not code blocks)."""
+	terms: set[str] = set()
+	for m in marker_re.finditer(prose):
+		for term in _BACKTICK_TERM_RE.findall(m.group(1)):
+			t = term.strip().lower()
+			if t:
+				terms.add(t)
+	return terms
+
+
+def _check_contradictions(
+	md_file_contents: list[tuple[Path, str]],
+	repo_root: Path,
+	effective_skill: str,
+) -> list[Finding]:
+	"""Detect terms marked ❌ in one file but ✅ in a different file of the same skill."""
+	# term → {rel_path: sentiment}  sentinel: "banned" | "preferred"
+	term_map: dict[str, dict[str, str]] = {}
+
+	for md_file, raw_content in md_file_contents:
+		rel = str(md_file.relative_to(repo_root))
+		# Strip fenced code blocks so ✅/❌ inside examples don't count as normative rules
+		prose = _CODE_FENCE_BLOCK_RE.sub("", raw_content)
+		for term in _extract_marked_terms(prose, _FORBIDDEN_MARKER_RE):
+			term_map.setdefault(term, {})[rel] = "banned"
+		for term in _extract_marked_terms(prose, _PREFERRED_MARKER_RE):
+			# Same-file guard: if the term is already "banned" in this file it's a
+			# before/after example — don't overwrite with "preferred".
+			if term_map.get(term, {}).get(rel) != "banned":
+				term_map.setdefault(term, {})[rel] = "preferred"
+
+	findings: list[Finding] = []
+	for term in sorted(term_map):
+		sentiments = term_map[term]
+		banned_files = sorted(f for f, s in sentiments.items() if s == "banned")
+		preferred_files = sorted(f for f, s in sentiments.items() if s == "preferred")
+		if not (banned_files and preferred_files):
+			continue
+		# Emit one finding per contradicting term (not per file pair).
+		banned_list = ", ".join(f"`{f}`" for f in banned_files)
+		preferred_list = ", ".join(f"`{f}`" for f in preferred_files)
+		findings.append(
+			Finding(
+				type="CONTRADICTING_RULES",
+				severity="warning",
+				skill=effective_skill,
+				file=banned_files[0],
+				message=(
+					f"`{term}` is marked ❌ in {banned_list} "
+					f"but ✅ in {preferred_list}. "
+					"Reconcile before agents receive conflicting guidance."
+				),
+			)
+		)
+
+	return findings
+
+
 def maybe_fix_link(md_file: Path, skill_dir: Path, broken_link: str) -> str | None:
 	path_part = broken_link.split("#", 1)[0]
 	if not path_part:
@@ -338,8 +508,35 @@ def audit_skills(repo_root: Path, output_dir: Path, apply_autofix: bool, oss: bo
 							autofix_changes += 1
 
 		md_files = iter_oss_markdown_files(skill_dir) if oss else iter_markdown_files(skill_dir)
+
+		# ── Quality checks ──────────────────────────────────────────────────
+		skill_line_count = len(content.splitlines())
+		findings.extend(_check_skill_length(skill_file, repo_root, effective_skill, skill_line_count))
+		findings.extend(_check_agent_optimization(skill_file, content, repo_root, effective_skill))
+
+		md_file_contents: list[tuple[Path, str]] = []
 		for md_file in md_files:
 			md_content = read_text(md_file)
+			md_file_contents.append((md_file, md_content))
+
+			# Reference file length check
+			if not md_file.samefile(skill_file):
+				ref_lines = len(md_content.splitlines())
+				if ref_lines > _REF_MD_LINE_LIMIT:
+					findings.append(
+						Finding(
+							type="REFERENCE_TOO_LONG",
+							severity="info",
+							skill=effective_skill,
+							file=str(md_file.relative_to(repo_root)),
+							message=(
+								f"Reference file is {ref_lines} lines (limit: {_REF_MD_LINE_LIMIT}). "
+								"Long references increase context window usage when loaded by AI agents."
+							),
+							suggestion="Split into sub-topic files or trim less-used examples.",
+						)
+					)
+
 			for idx, line in enumerate(md_content.splitlines(), start=1):
 				for _, link in LINK_RE.findall(line):
 					target, _ = local_link_target(md_file, link)
@@ -368,6 +565,9 @@ def audit_skills(repo_root: Path, output_dir: Path, apply_autofix: bool, oss: bo
 					findings.append(finding)
 			if apply_autofix:
 				write_text(md_file, md_content)
+
+		# Contradiction check across all files for this skill
+		findings.extend(_check_contradictions(md_file_contents, repo_root, effective_skill))
 
 	for name, paths in sorted(skill_name_to_paths.items()):
 		if len(paths) > 1:
@@ -898,9 +1098,23 @@ def combine_reports(output_dir: Path) -> tuple[int, int]:
 		lines += ["", "> Full diff in the **Files changed** tab above.", ""]
 
 	# ── Structural findings ──────────────────────────────────────────────────
-	if structural_count > 0:
+	# Surface contradictions directly; group remaining structural issues by count.
+	contradict_findings = [f for f in audit.get("findings", []) if f.get("type") == "CONTRADICTING_RULES"]
+	other_structural = max(0, structural_count - len(contradict_findings))
+
+	if contradict_findings:
+		n = len(contradict_findings)
+		label = "contradiction" if n == 1 else "contradictions"
+		lines += [f"**⚠️ {n} {label}** found across skill files", ""]
+		for f in contradict_findings[:5]:
+			lines.append(f"- {f['message']}")
+		if len(contradict_findings) > 5:
+			lines.append(f"- _{len(contradict_findings) - 5} more — see `skills-audit.md`_")
+		lines.append("")
+
+	if other_structural > 0:
 		lines += [
-			f"**{structural_count} structural issue(s)** · details in `skills-audit.md` run artifact",
+			f"**{other_structural} structural issue(s)** · details in `skills-audit.md` run artifact",
 			"",
 		]
 
