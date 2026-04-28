@@ -1035,7 +1035,94 @@ def _key_change(old: str, new: str, max_len: int = 50) -> tuple[str, str]:
 	return fragment_old, fragment_new
 
 
-def combine_reports(output_dir: Path) -> tuple[int, int]:
+# ── Evolution badge ─────────────────────────────────────────────────────────
+_BADGE_BEGIN = "<!-- skill-evolution:badge:begin -->"
+_BADGE_END = "<!-- skill-evolution:badge:end -->"
+
+
+def _evolution_stage(n: int) -> tuple[str, str, str]:
+	"""Return (emoji, label, shields_color) for evolution number n."""
+	if n <= 1:
+		return "🦠", "newborn", "blue"
+	if n <= 5:
+		return "🐛", "evolving", "green"
+	if n <= 15:
+		return "🦎", "thriving", "yellow"
+	if n <= 30:
+		return "🧠", "sentient", "orange"
+	return "🤖", "legendary", "blueviolet"
+
+
+def _badge_url(n: int) -> str:
+	stage_label = _evolution_stage(n)[1]
+	color = _evolution_stage(n)[2]
+	# URL-encode × as %C3%97 for shields.io
+	return (
+		f"https://img.shields.io/badge/evolved-{n}%C3%97_{stage_label}-{color}"
+		"?style=flat-square&logo=dna&logoColor=white"
+	)
+
+
+def _badge_md(n: int, repo_url: str = "") -> str:
+	url = _badge_url(n)
+	link = repo_url if repo_url else "#"
+	return f"[![Skill evolved {n}\u00d7]({url})]({link})"
+
+
+def _ai_patch_summary(ai_updates: dict) -> str:
+	"""Collect AI-generated summaries from applied entries into one sentence."""
+	summaries = [
+		entry["summary"].rstrip(". ")
+		for entry in ai_updates.get("by_skill", [])
+		if entry.get("applied", 0) > 0 and entry.get("summary")
+	]
+	if not summaries:
+		return ""
+	return ". ".join(summaries) + "."
+
+
+def update_readme_badge(repo_root: Path, n: int, repo_url: str = "") -> bool:
+	"""Add or update the skill-evolution badge block in README.md.
+
+	Inserts after the first top-level heading if the badge block isn't present yet.
+	Returns True if README.md was modified.
+	"""
+	readme = repo_root / "README.md"
+	if not readme.exists():
+		return False
+	content = readme.read_text(encoding="utf-8")
+	badge_block = f"{_BADGE_BEGIN}\n{_badge_md(n, repo_url)}\n{_BADGE_END}"
+
+	begin_idx = content.find(_BADGE_BEGIN)
+	end_idx = content.find(_BADGE_END)
+
+	if begin_idx != -1 and end_idx != -1 and end_idx > begin_idx:
+		new_content = content[:begin_idx] + badge_block + content[end_idx + len(_BADGE_END) :]
+	else:
+		heading_match = re.search(r"^#[^#].*$", content, re.MULTILINE)
+		if heading_match:
+			insert_at = heading_match.end()
+			new_content = content[:insert_at] + "\n\n" + badge_block + content[insert_at:]
+		else:
+			new_content = badge_block + "\n\n" + content
+
+	if new_content == content:
+		return False
+	readme.write_text(new_content, encoding="utf-8")
+	return True
+
+
+def read_evolution_num(repo_root: Path) -> int:
+	"""Read the current evolution number from README.md badge, or 0 if not present."""
+	readme = repo_root / "README.md"
+	if not readme.exists():
+		return 0
+	content = readme.read_text(encoding="utf-8")
+	m = re.search(r"evolved-(\d+)%C3%97", content)
+	return int(m.group(1)) if m else 0
+
+
+def combine_reports(output_dir: Path, evolution_num: int = 0) -> tuple[int, int]:
 	audit_path = output_dir / "skills-audit.json"
 	feedback_path = output_dir / "skills-feedback.json"
 	semantic_path = output_dir / "skills-semantic.json"
@@ -1067,35 +1154,26 @@ def combine_reports(output_dir: Path) -> tuple[int, int]:
 	patch_word = "patch" if ai_patches_applied == 1 else "patches"
 	structural_count = findings_count - ai_patches_applied
 
-	# ── Header ──────────────────────────────────────────────────────────────
-	lines = [
-		f"🤖 **Skill health** — {now}",
-		"",
-	]
-
-	# ── AI version patches: compact table ───────────────────────────────────
-	if ai_updates_enabled and ai_patches_applied > 0:
-		lines += [
-			f"**{ai_patches_applied} version {patch_word}** · sourced from live GitHub releases",
+	# ── Header: evolution badge + date ──────────────────────────────────────
+	if evolution_num > 0:
+		emoji, _stage, _color = _evolution_stage(evolution_num)
+		badge = _badge_md(evolution_num)
+		lines: list[str] = [
+			badge,
 			"",
-			"| File | Before → After |",
-			"|------|----------------|",
+			f"{emoji} **Evolution #{evolution_num}** · {now}",
+			"",
 		]
-		for entry in ai_updates.get("by_skill", []):
-			if entry.get("applied", 0) == 0:
-				continue
-			label = entry.get("file") or entry.get("skill", "?")
-			applied_patches = [p for p in entry.get("patches", []) if p.get("_status") == "applied"]
-			if applied_patches:
-				for p in applied_patches:
-					old_frag, new_frag = _key_change(
-						p.get("old_text", "").strip(),
-						p.get("new_text", "").strip(),
-					)
-					lines.append(f"| `{label}` | `{old_frag}` → `{new_frag}` |")
-			else:
-				lines.append(f"| `{label}` | _{entry.get('applied', 0)} change(s) — see Files changed_ |")
-		lines += ["", "> Full diff in the **Files changed** tab above.", ""]
+	else:
+		lines = [f"🤖 **Skill health** — {now}", ""]
+
+	# ── Plain-English summary of AI patches ─────────────────────────────────
+	if ai_updates_enabled and ai_patches_applied > 0:
+		summary_text = _ai_patch_summary(ai_updates)
+		if summary_text:
+			lines += [f"> {summary_text}", ""]
+		else:
+			lines += [f"_{ai_patches_applied} version {patch_word} applied — see Files changed tab._", ""]
 
 	# ── Structural findings ──────────────────────────────────────────────────
 	# Surface contradictions directly; group remaining structural issues by count.
@@ -1173,6 +1251,15 @@ def main(argv: list[str] | None = None) -> int:
 
 	combine = sub.add_parser("combine")
 	combine.add_argument("--output-dir", required=True)
+	combine.add_argument("--evolution-num", type=int, default=0, help="Current evolution number (0 = no badge)")
+
+	update_badge = sub.add_parser("update-badge")
+	update_badge.add_argument("--repo-root", required=True)
+	update_badge.add_argument("--evolution-num", type=int, required=True)
+	update_badge.add_argument("--repo-url", default="", help="URL to link badge to (e.g. merged PRs list)")
+
+	read_evo = sub.add_parser("read-evolution-num")
+	read_evo.add_argument("--repo-root", required=True)
 
 	args = parser.parse_args(argv)
 	if args.command == "audit":
@@ -1188,13 +1275,21 @@ def main(argv: list[str] | None = None) -> int:
 		print(f"proposal_count={proposal_count}")
 		return 0
 	if args.command == "combine":
-		findings, proposals = combine_reports(Path(args.output_dir))
+		findings, proposals = combine_reports(Path(args.output_dir), evolution_num=args.evolution_num)
 		print(f"findings_count={findings}")
 		print(f"proposal_count={proposals}")
 		semantic_path = Path(args.output_dir) / "skills-semantic.json"
 		semantic = json.loads(read_text(semantic_path)) if semantic_path.exists() else {"content_findings": []}
 		has_findings = findings > 0 or proposals > 0 or len(semantic.get("content_findings", [])) > 0
 		print(f"has_findings={'true' if has_findings else 'false'}")
+		return 0
+	if args.command == "update-badge":
+		modified = update_readme_badge(Path(args.repo_root), args.evolution_num, args.repo_url)
+		print(f"readme_modified={'true' if modified else 'false'}")
+		return 0
+	if args.command == "read-evolution-num":
+		n = read_evolution_num(Path(args.repo_root))
+		print(f"evolution_num={n}")
 		return 0
 	return 1
 

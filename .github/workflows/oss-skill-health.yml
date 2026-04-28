@@ -123,19 +123,33 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/.skills-evolution/src
         run: |
-          python3 -m skills_evolution.health combine --output-dir outputs > outputs/skills-health-counts.env
+          # Read current evolution number from README, then increment for this run
+          EVO_CURRENT=$(python3 -m skills_evolution.health read-evolution-num --repo-root . | grep -oP '(?<=evolution_num=)\d+' || echo 0)
+          EVO_NEXT=$((EVO_CURRENT + 1))
+          echo "evolution_num=$EVO_NEXT" >> "$GITHUB_OUTPUT"
+          python3 -m skills_evolution.health combine --output-dir outputs --evolution-num "$EVO_NEXT" > outputs/skills-health-counts.env
           cat outputs/skills-health-counts.env >> "$GITHUB_OUTPUT"
 
       - name: Commit autofixes and open PR
         if: steps.counts.outputs.has_findings == 'true' && inputs.open_pr_on_findings == true
         env:
           GH_TOKEN: ${{ secrets.token }}
+          PYTHONPATH: ${{ github.workspace }}/.skills-evolution/src
+          EVOLUTION_NUM: ${{ steps.counts.outputs.evolution_num }}
         run: |
           BRANCH_NAME="skills-health/$(date -u +%Y-%m)"
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}/pulls?q=is%3Apr+is%3Amerged"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH_NAME"
-          git add SKILL.md references/ 2>/dev/null || true
+
+          # Update the evolution badge in README.md
+          python3 -m skills_evolution.health update-badge \
+            --repo-root . \
+            --evolution-num "$EVOLUTION_NUM" \
+            --repo-url "$REPO_URL"
+
+          git add SKILL.md references/ README.md 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
             echo "NO_CHANGES=true" >> "$GITHUB_ENV"

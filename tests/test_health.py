@@ -61,9 +61,9 @@ class HealthTests(unittest.TestCase):
 			# AI patches applied (3) should be folded into findings_count.
 			self.assertEqual(findings, 3)
 			summary = (output_dir / "skills-health-summary.md").read_text(encoding="utf-8")
-			self.assertIn("3 version patches", summary)
-			self.assertIn("tca-standards", summary)
-			self.assertIn("swiftui-standards", summary)
+			# New format: plain-English summaries from AI, not a before/after table.
+			self.assertIn("Updated TCA version", summary)
+			self.assertIn("Updated SwiftUI API", summary)
 
 	def test_analyze_feedback_uses_normal_review_comments(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp_dir:
@@ -428,6 +428,92 @@ class SkillQualityChecksTests(unittest.TestCase):
 			audit = json.loads((output / "skills-audit.json").read_text(encoding="utf-8"))
 			types = [f["type"] for f in audit["findings"]]
 			self.assertIn("CONTRADICTING_RULES", types)
+
+
+class EvolutionBadgeTests(unittest.TestCase):
+	"""Tests for evolution badge helpers and README update."""
+
+	def test_stage_labels(self) -> None:
+		self.assertEqual(health._evolution_stage(1), ("🦠", "newborn", "blue"))
+		self.assertEqual(health._evolution_stage(5), ("🐛", "evolving", "green"))
+		self.assertEqual(health._evolution_stage(15), ("🦎", "thriving", "yellow"))
+		self.assertEqual(health._evolution_stage(30), ("🧠", "sentient", "orange"))
+		self.assertEqual(health._evolution_stage(31), ("🤖", "legendary", "blueviolet"))
+
+	def test_badge_url_contains_num(self) -> None:
+		url = health._badge_url(7)
+		self.assertIn("7", url)
+		self.assertIn("shields.io", url)
+
+	def test_badge_md_renders_link(self) -> None:
+		md = health._badge_md(3, repo_url="https://github.com/owner/repo")
+		self.assertIn("https://github.com/owner/repo", md)
+		self.assertIn("![", md)
+
+	def test_ai_patch_summary_combines_applied_summaries(self) -> None:
+		ai = {
+			"by_skill": [
+				{"applied": 2, "summary": "Updated foo version."},
+				{"applied": 0, "summary": "No changes."},
+				{"applied": 1, "summary": "Fixed bar API"},
+			]
+		}
+		result = health._ai_patch_summary(ai)
+		self.assertIn("Updated foo version", result)
+		self.assertIn("Fixed bar API", result)
+		self.assertNotIn("No changes", result)
+
+	def test_ai_patch_summary_empty_when_no_applied(self) -> None:
+		ai = {"by_skill": [{"applied": 0, "summary": "Nothing."}]}
+		self.assertEqual(health._ai_patch_summary(ai), "")
+
+	def test_update_readme_badge_inserts_after_heading(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			readme = root / "README.md"
+			readme.write_text("# My Skill\n\nSome content.\n", encoding="utf-8")
+			modified = health.update_readme_badge(root, 3, "https://example.com")
+			self.assertTrue(modified)
+			content = readme.read_text(encoding="utf-8")
+			self.assertIn("<!-- skill-evolution:badge:begin -->", content)
+			self.assertIn("<!-- skill-evolution:badge:end -->", content)
+			self.assertIn("evolved-3", content)
+
+	def test_update_readme_badge_replaces_existing(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			readme = root / "README.md"
+			old_badge = "<!-- skill-evolution:badge:begin -->\n![old badge](url)\n<!-- skill-evolution:badge:end -->"
+			readme.write_text(f"# Skill\n\n{old_badge}\n\nContent.\n", encoding="utf-8")
+			health.update_readme_badge(root, 5)
+			content = readme.read_text(encoding="utf-8")
+			self.assertIn("evolved-5", content)
+			self.assertNotIn("old badge", content)
+
+	def test_read_evolution_num_from_readme(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			readme = root / "README.md"
+			readme.write_text("![badge](https://img.shields.io/badge/evolved-12%C3%97_thriving-yellow)", encoding="utf-8")
+			self.assertEqual(health.read_evolution_num(root), 12)
+
+	def test_read_evolution_num_missing_readme(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			self.assertEqual(health.read_evolution_num(Path(tmp)), 0)
+
+	def test_combine_reports_with_evolution_num_adds_badge(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			output_dir = Path(tmp)
+			(output_dir / "skills-audit.json").write_text(json.dumps({"findings_count": 0}), encoding="utf-8")
+			(output_dir / "skills-feedback.json").write_text(
+				json.dumps({"proposal_count": 0, "trace_count": 0, "comment_signal_count": 0, "disputed_sections": []}),
+				encoding="utf-8",
+			)
+			health.combine_reports(output_dir, evolution_num=7)
+			summary = (output_dir / "skills-health-summary.md").read_text(encoding="utf-8")
+			self.assertIn("Evolution #7", summary)
+			self.assertIn("evolved-7", summary)
+			self.assertIn("🦎", summary)  # stage for 7
 
 
 if __name__ == "__main__":
