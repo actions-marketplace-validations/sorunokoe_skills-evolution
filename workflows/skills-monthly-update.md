@@ -1,7 +1,13 @@
 ---
+# Schedule: change this to any frequency you like.
+# Examples: "weekly", "daily around 9:00", "every 2 weeks"
+# See: https://github.github.com/gh-aw/reference/triggers/#scheduled-triggers-schedule
+#
+# workflow_dispatch lets you trigger a run manually at any time via:
+#   gh aw run skills-monthly-update
 on:
   schedule: monthly
-
+  workflow_dispatch:
 skip-bots: true
 description: "Monthly review and update of AI skill files against current library versions"
 source: "sorunokoe/skills-evolution/workflows/skills-monthly-update.md@main"

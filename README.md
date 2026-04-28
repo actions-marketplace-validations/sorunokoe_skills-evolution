@@ -11,12 +11,14 @@ Install the [GitHub Agentic Workflows](https://github.github.com/gh-aw/introduct
 gh aw add sorunokoe/skills-evolution/workflows/skills-pr-check.md@latest
 gh aw compile
 
-# Run a monthly update: discover library versions, patch outdated skill files, open a PR
+# Auto-update skill files on a schedule (default: monthly — edit the frontmatter to change)
 gh aw add sorunokoe/skills-evolution/workflows/skills-monthly-update.md@latest
 gh aw compile
 ```
 
 That's it. No Python, no YAML to maintain. The AI handles the rest.
+
+**Changing the schedule:** After `gh aw add`, open `.github/workflows/skills-monthly-update.md` and edit the `schedule:` line — for example `schedule: weekly` or `schedule: daily around 9:00` — then `gh aw compile` to apply. Run it any time on demand with `gh aw run skills-monthly-update`.
 
 See [`workflows/`](./workflows/) for the workflow source files.
 
@@ -24,7 +26,8 @@ See [`workflows/`](./workflows/) for the workflow source files.
 
 ## Advanced: reusable GitHub Actions workflows
 
-If you prefer standard GitHub Actions (or gh-aw isn't available), use the reusable YAML workflows instead.
+If you prefer standard GitHub Actions (or gh-aw isn't available), use the reusable YAML workflows.
+**The consumer's wrapper fully controls the trigger** — set any cron or add `workflow_dispatch`.
 
 ### PR skill review
 
@@ -47,15 +50,15 @@ jobs:
       copilot_token: ${{ secrets.COPILOT_TOKEN }}
 ```
 
-### Monthly skill update
+### Skill update — consumer controls the schedule
 
 ```yaml
 # .github/workflows/skills-health.yml
-name: Monthly Skills Health
+name: Skills Health
 on:
   schedule:
-    - cron: "0 3 1 * *"
-  workflow_dispatch:
+    - cron: "0 3 1 * *"   # ← change to any frequency you like
+  workflow_dispatch:        # ← always available for on-demand runs
 permissions:
   contents: write
   pull-requests: write

@@ -1,4 +1,10 @@
 name: Skills Health
+# Reusable workflow — the consumer's wrapper defines when this runs.
+# Example wrapper trigger:
+#   on:
+#     schedule:
+#       - cron: "0 3 1 * *"   # monthly
+#     workflow_dispatch:        # manual trigger
 
 on:
   workflow_call:
