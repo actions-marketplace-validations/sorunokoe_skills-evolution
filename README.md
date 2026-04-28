@@ -1,26 +1,106 @@
 # skills-evolution
 
-`skills-evolution` is the shared toolkit for AI skill governance.
+AI skill governance for software teams — keep your AI guidance files accurate, up to date, and evolving automatically.
 
-It packages five pieces:
+## Quick start (recommended)
 
-1. **Trace CLI** for writing local trace records and publishing them into a PR body.
-2. **MCP server** so agents can record/publish traces through standard tools.
-3. **Health toolkit** for structural audit, normal PR comment analysis, trace/verdict aggregation, and summary generation.
-4. **Optional semantic pass** for disputed sections only.
-5. **Shared GitHub Action/workflow assets** for GitHub-web PR fallback and monthly health automation.
+Install the [GitHub Agentic Workflows](https://github.github.com/gh-aw/introduction/overview/) into your repository:
 
-## Design
+```bash
+# Review skill files automatically on every PR that changes them
+gh aw add sorunokoe/skills-evolution/workflows/skills-pr-check.md@latest
+gh aw compile
 
-The precise path is intentionally simple:
+# Run a monthly update: discover library versions, patch outdated skill files, open a PR
+gh aw add sorunokoe/skills-evolution/workflows/skills-monthly-update.md@latest
+gh aw compile
+```
 
-1. AI records exact skill usage into `.github/.skill-trace.ndjson` locally.
-2. After the PR exists, the CLI publishes those traces into the hidden PR-body block.
-3. Reviewers judge exact trace IDs in comments.
+That's it. No Python, no YAML to maintain. The AI handles the rest.
 
-The only unavoidable edge case is a PR opened on GitHub.com after traces were created on a laptop. In that flow, some pushed artifact is required. The fallback action solves that by consuming a force-added `.github/.skill-trace.ndjson` and moving it into the PR body.
+See [`workflows/`](./workflows/) for the workflow source files.
 
-For low-friction repository adoption, the monthly health workflow can also analyze **normal PR comments and reviews** without requiring trace capture or structured `skill-miss:` comments. Structured tags remain optional high-confidence hints when teams want them.
+---
+
+## Advanced: reusable GitHub Actions workflows
+
+If you prefer standard GitHub Actions (or gh-aw isn't available), use the reusable YAML workflows instead.
+
+### PR skill review
+
+```yaml
+# .github/workflows/skills-pr-check.yml
+name: Skills PR Check
+on:
+  pull_request:
+    paths: [".github/skills/**", ".claude/skills/**"]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  check:
+    uses: sorunokoe/skills-evolution/.github/workflows/skills_pr_check.yml@latest
+    with:
+      tools_ref: latest
+      tech_stack: ""        # optional: describe your project's stack
+    secrets:
+      copilot_token: ${{ secrets.COPILOT_TOKEN }}
+```
+
+### Monthly skill update
+
+```yaml
+# .github/workflows/skills-health.yml
+name: Monthly Skills Health
+on:
+  schedule:
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  models: read
+jobs:
+  health:
+    uses: sorunokoe/skills-evolution/.github/workflows/skills_health.yml@latest
+    with:
+      tools_ref: latest
+      enable_ai_skill_update: true
+    secrets:
+      token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+---
+
+## What it does
+
+| Feature | How |
+|---|---|
+| PR review | Reads changed `SKILL.md` files, posts a concise review comment |
+| Monthly update | Discovers library versions from package manager files, patches outdated skill content, opens a PR |
+| Multi-ecosystem | Reads `Package.resolved`, `go.mod`, `Cargo.lock`, `pubspec.yaml`, `package.json` |
+| Multi-agent | Finds skills in both `.github/skills/` and `.claude/skills/` |
+| Path safety | Only patches files inside `*/skills/*/SKILL.md` — never arbitrary files |
+
+## Skill file location
+
+Skills are discovered from:
+- `.github/skills/<skill-name>/SKILL.md` — visible to Copilot, Xcode, and other GitHub-aware agents
+- `.claude/skills/<skill-name>/SKILL.md` — Claude-specific skills
+
+If the same skill name exists in both locations, `.github/skills/` takes priority.
+
+---
+
+## Python package
+
+For programmatic use or CI without gh-aw:
+
+```bash
+pip install skills-evolution
+```
+
+
 
 ## Install
 
