@@ -1084,25 +1084,37 @@ def _ai_patch_summary(ai_updates: dict) -> str:
 def update_readme_badge(repo_root: Path, n: int, repo_url: str = "") -> bool:
 	"""Add or update the skill-evolution badge block in README.md.
 
-	Inserts after the first top-level heading if the badge block isn't present yet.
+	Insertion priority:
+	  1. Replace existing sentinel block (in-place update).
+	  2. Append after the last [![ badge line in the first 60 lines
+	     (keeps the badge with the other shields.io badges at the top).
+	  3. Fallback: prepend to the file.
+
 	Returns True if README.md was modified.
 	"""
 	readme = repo_root / "README.md"
 	if not readme.exists():
 		return False
 	content = readme.read_text(encoding="utf-8")
-	badge_block = f"{_BADGE_BEGIN}\n{_badge_md(n, repo_url)}\n{_BADGE_END}"
+	badge_line = _badge_md(n, repo_url)
+	badge_block = f"{_BADGE_BEGIN}\n{badge_line}\n{_BADGE_END}"
 
 	begin_idx = content.find(_BADGE_BEGIN)
 	end_idx = content.find(_BADGE_END)
 
 	if begin_idx != -1 and end_idx != -1 and end_idx > begin_idx:
+		# Replace existing sentinel block in-place.
 		new_content = content[:begin_idx] + badge_block + content[end_idx + len(_BADGE_END) :]
 	else:
-		heading_match = re.search(r"^#[^#].*$", content, re.MULTILINE)
-		if heading_match:
-			insert_at = heading_match.end()
-			new_content = content[:insert_at] + "\n\n" + badge_block + content[insert_at:]
+		# Find the last [![ badge line in the first 60 lines and insert after it.
+		lines = content.split("\n")
+		last_badge_idx = -1
+		for i, line in enumerate(lines[:60]):
+			if line.strip().startswith("[!["):
+				last_badge_idx = i
+		if last_badge_idx >= 0:
+			new_lines = lines[: last_badge_idx + 1] + [badge_block] + lines[last_badge_idx + 1 :]
+			new_content = "\n".join(new_lines)
 		else:
 			new_content = badge_block + "\n\n" + content
 

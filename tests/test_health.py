@@ -468,6 +468,7 @@ class EvolutionBadgeTests(unittest.TestCase):
 		self.assertEqual(health._ai_patch_summary(ai), "")
 
 	def test_update_readme_badge_inserts_after_heading(self) -> None:
+		"""Falls back to prepend when there are no badge lines and no heading cluster."""
 		with tempfile.TemporaryDirectory() as tmp:
 			root = Path(tmp)
 			readme = root / "README.md"
@@ -478,6 +479,45 @@ class EvolutionBadgeTests(unittest.TestCase):
 			self.assertIn("<!-- skill-evolution:badge:begin -->", content)
 			self.assertIn("<!-- skill-evolution:badge:end -->", content)
 			self.assertIn("evolved-3", content)
+
+	def test_update_readme_badge_inserts_after_last_badge_line(self) -> None:
+		"""Badge lands right after the last [![ line in the header cluster."""
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			readme = root / "README.md"
+			readme.write_text(
+				"# My Skill\n\n"
+				"[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)\n"
+				"[![Python](https://img.shields.io/badge/Python-3.11-blue)](https://python.org)\n\n"
+				"Description.\n",
+				encoding="utf-8",
+			)
+			health.update_readme_badge(root, 2)
+			lines = readme.read_text(encoding="utf-8").split("\n")
+			badge_line_idx = next(i for i, l in enumerate(lines) if "[![Python" in l)
+			sentinel_idx = next(i for i, l in enumerate(lines) if "skill-evolution:badge:begin" in l)
+			self.assertEqual(sentinel_idx, badge_line_idx + 1)
+
+	def test_update_readme_badge_not_fooled_by_hash_in_code_block(self) -> None:
+		"""Code block comments like '# Clone...' must not trigger heading insertion."""
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			readme = root / "README.md"
+			readme.write_text(
+				"[![License](https://example.com/badge.svg)](LICENSE)\n\n"
+				"Intro text.\n\n"
+				"```bash\n"
+				"# Clone into the canonical skill location:\n"
+				"git clone https://example.com/repo.git\n"
+				"```\n",
+				encoding="utf-8",
+			)
+			health.update_readme_badge(root, 1)
+			content = readme.read_text(encoding="utf-8")
+			lines = content.split("\n")
+			badge_idx = next(i for i, l in enumerate(lines) if "skill-evolution:badge:begin" in l)
+			# Must appear in the first 3 lines (after the [![License...] badge), not inside the code block
+			self.assertLess(badge_idx, 5)
 
 	def test_update_readme_badge_replaces_existing(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp:
