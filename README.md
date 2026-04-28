@@ -233,8 +233,8 @@ skills-evolution-health collect-feedback \
 skills-evolution-health feedback \
   --repo-root . --raw outputs/raw.json --output-dir outputs
 
-# Combine all reports into a summary
-skills-evolution-health combine --output-dir outputs
+# Combine all reports into a summary (pass --evolution-num to add the evolution badge)
+skills-evolution-health combine --output-dir outputs --evolution-num 7
 ```
 
 ### MCP server
@@ -257,6 +257,28 @@ skills-evolution-semantic-pass \
   --output-dir outputs \
   --copilot-token "$COPILOT_TOKEN"
 ```
+
+---
+
+## Evolution badge
+
+When `enable_ai_skill_update: true` and the workflow opens a PR, the PR description includes an **evolution badge** — a live shields.io badge that tracks how many times the skill has been automatically updated. After the PR is merged, the badge is committed to the skill's `README.md`.
+
+Each badge links to the merged PRs list so reviewers can see the full history at a glance.
+
+### Stage progression
+
+| # | Badge | Stage | Color |
+|---|-------|-------|-------|
+| 1 | 🦠 | **newborn** — first evolution | blue |
+| 2–5 | 🐛 | **evolving** — finding its shape | green |
+| 6–15 | 🦎 | **thriving** — actively maintained | yellow |
+| 16–30 | 🧠 | **sentient** — seriously battle-tested | orange |
+| 31+ | 🤖 | **legendary** — can probably maintain itself | blueviolet |
+
+Example badge after 7 evolutions:
+
+[![Skill evolved 7×](https://img.shields.io/badge/evolved-7%C3%97_thriving-yellow?style=flat-square&logo=dna&logoColor=white)](#)
 
 ---
 
