@@ -2,58 +2,60 @@
 
 # skills-evolution
 
-<img src="skills-evolution.png" alt="skills-evolution logo: a growing plant from seed to flourishing bush">
+<img src="skills-evolution.png" alt="skills-evolution logo: a growing plant from seed to flourishing bush" width="400">
 
 **Keep your AI skill files accurate, up to date, and evolving — automatically.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
 
-[Overview](#overview) · [Quick start](#quick-start) · [Team setup](#setup-for-teams) · [Standalone skill repos](#setup-for-standalone-skill-repos) · [Showcase](#showcase)
+[What it does](#what-it-does) · [Evolution badge](#evolution-badge) · [Quick start](#quick-start) · [Standalone skill repos](#setup-for-standalone-skill-repos) · [Showcase](#showcase)
 
 </div>
 
 ---
 
-## Overview
+## What it does
 
-**skills-evolution** automatically maintains AI skill guidance files in your repositories. It keeps `.github/skills/` and `.claude/skills/` directories up to date by:
+**skills-evolution** runs on a monthly schedule and keeps your AI skill files fresh:
 
-- **Detecting version drift** — Scans your package manifests (`package.json`, `go.mod`, `Cargo.lock`, etc.) and finds outdated library versions referenced in your skills
-- **Patching stale guidance** — Uses Claude AI to update version references and modernize best practices once per month, then opens a PR for your review
-- **Reviewing skill changes** — On every PR touching a skill file, posts an AI-powered review checking for accuracy, scope issues, and common anti-patterns
-- **Auditing structure** — Validates YAML frontmatter, detects broken internal links, and auto-fixes what it can safely repair
+- **Finds stale versions** — reads `package.json`, `go.mod`, `Cargo.lock`, etc. and spots version drift
+- **Patches them** — calls an AI model once per skill, applies safe inline updates, opens a PR for your review
+- **Audits structure** — validates frontmatter, checks for contradictions across skill files, flags skills that are too long or missing routing hints
+- **Reviews skill PRs** — posts an AI-powered review on every PR that touches a skill file
 
-Everything runs on a schedule or on-demand — no local setup required. Skills stay fresh and AI agents get better guidance.
+No local setup needed. Everything runs in GitHub Actions.
 
 ---
 
-## What gets maintained
+## Evolution badge
 
-Skill files are discovered in two standard locations:
+Every time the workflow runs and opens a PR, it adds an **evolution badge** to the PR description. After merge, the badge is committed to the skill's `README.md` — so you can see how far it's come.
 
-- **`.github/skills/<name>/SKILL.md`** — For GitHub Copilot, Xcode, and other GitHub-aware AI agents
-- **`.claude/skills/<name>/SKILL.md`** — For Claude-specific guidance
+[![Skill evolved 7×](https://img.shields.io/badge/evolved-7%C3%97_thriving-yellow?style=flat-square&logo=dna&logoColor=white)](#)
 
-Each skill directory can include supplementary markdown files (references, examples, tutorials, etc.). The tool automatically detects and maintains all of them.
+### Stage progression
+
+| Range | Emoji | Stage |
+|-------|-------|-------|
+| 1 | 🦠 | **newborn** |
+| 2–5 | 🐛 | **evolving** |
+| 6–15 | 🦎 | **thriving** |
+| 16–30 | 🧠 | **sentient** |
+| 31+ | 🤖 | **legendary** |
 
 ---
 
 ## Quick start
 
-Choose one of these integration methods. Both do the same thing — pick what fits your workflow best.
+Add two workflow files to your repo — that's it.
 
----
+### 1. PR skill review
 
-## Setup for teams
-
-### Option 1: Copy workflow files (Recommended — 2 minutes)
-
-Add these two workflows to your `.github/workflows/` directory:
-
-**Step 1: Create `.github/workflows/skills-pr-check.yml`**
+Reviews any PR that touches a skill file.
 
 ```yaml
+# .github/workflows/skills-pr-check.yml
 name: Skills PR Review
 on:
   pull_request:
@@ -70,16 +72,17 @@ jobs:
       copilot_token: ${{ secrets.COPILOT_TOKEN }}
 ```
 
-This workflow reviews your skill changes on every PR.
+### 2. Monthly health check
 
-**Step 2: Create `.github/workflows/skills-health.yml`**
+Detects version drift and opens a PR with updates once a month.
 
 ```yaml
+# .github/workflows/skills-health.yml
 name: Monthly Skill Update
 on:
   schedule:
-    - cron: "0 3 1 * *"   # runs on the 1st of each month at 3am UTC
-  workflow_dispatch:        # or trigger manually anytime
+    - cron: "0 3 1 * *"   # 1st of each month, 3am UTC
+  workflow_dispatch:
 permissions:
   contents: write
   pull-requests: write
@@ -93,47 +96,16 @@ jobs:
       token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-This workflow checks for version drift and opens a PR with updates once per month. **Change the schedule by editing the `cron` line above** (or use `workflow_dispatch` to run manually anytime).
-
-That's it! Commit these files and you're done.
-
-### Option 2: Use GitHub's automation tools
-
-If your team already uses GitHub's automation platform (like gh-aw):
-
-```bash
-# Add PR review workflow
-gh aw add sorunokoe/skills-evolution/workflows/skills-pr-check.md@latest
-gh aw compile
-
-# Add monthly update workflow
-gh aw add sorunokoe/skills-evolution/workflows/skills-monthly-update.md@latest
-gh aw compile
-```
+Commit both files and you're done. Trigger manually anytime with `workflow_dispatch`.
 
 ---
 
 ## Setup for standalone skill repos
 
-Publishing a standalone skill repository (like [swift-kmp-skill](https://github.com/sorunokoe/swift-kmp-skill))? 
+Publishing a standalone skill repo (like [swift-kmp-skill](https://github.com/sorunokoe/swift-kmp-skill))? Use the `--oss` mode where `SKILL.md` lives at the repo root.
 
-This tool has a **standalone mode** for repos where:
-- A single `SKILL.md` file lives at the repository root
-- Supporting content goes in `references/` and `examples/` directories
-- You want the same version tracking and AI reviews, but for a single published skill
-
-### Required GitHub repository settings
-
-Before the monthly health workflow can open PRs automatically, enable this in **each skill repo**:
-
-> **Settings → Actions → General → Workflow permissions**  
-> ✅ Check **"Allow GitHub Actions to create and approve pull requests"**
-
-Without this, the workflow still runs and pushes the update branch — but you'll need to open the PR manually.
-
-### Integration
-
-**Using GitHub Actions workflows:**
+> **One-time setting:** go to **Settings → Actions → General → Workflow permissions** and check  
+> **"Allow GitHub Actions to create and approve pull requests"**
 
 ```yaml
 # .github/workflows/skill-pr-review.yml
@@ -152,7 +124,7 @@ jobs:
 ```
 
 ```yaml
-# .github/workflows/skill-update.yml
+# .github/workflows/skill-health.yml
 name: Monthly Skill Health Check
 on:
   schedule:
@@ -171,133 +143,55 @@ jobs:
       token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### Differences from team mode
-
-| Aspect | Team repos | Standalone skill repos |
-|--------|-----------|------------------------|
-| **Skill files** | `.github/skills/*/SKILL.md` | `SKILL.md` at root |
-| **Content audited** | All `.md` files in skill directories | `SKILL.md` + `references/` + `examples/` |
-| **Skill identity** | Determined by folder name | Determined by `name:` field in frontmatter |
-| **Version detection** | From package manifests in repo | From package manifests in repo |
-| **PR feedback** | Comprehensive audit reports | Simplified reviews (you maintain it directly) |
-| **Target use case** | Multi-skill monorepos | Single published skill + references |
-
 ---
 
 ## Reference
+
+### CLI
+
+```bash
+# Audit skill structure
+skills-evolution-health audit --repo-root . --output-dir outputs [--oss]
+
+# Collect PR feedback signals
+skills-evolution-health collect-feedback \
+  --repo owner/repo --token "$GH_TOKEN" --output outputs/raw.json
+
+# Analyze feedback into proposals
+skills-evolution-health feedback \
+  --repo-root . --raw outputs/raw.json --output-dir outputs
+
+# Combine into a PR-ready summary with evolution badge
+skills-evolution-health combine --output-dir outputs --evolution-num 7
+
+# Update the README badge after merge
+skills-evolution-health update-badge --repo-root . --evolution-num 7 --repo-url https://github.com/owner/repo/pulls?q=is%3Amerged
+
+# Read current evolution number from README
+skills-evolution-health read-evolution-num --repo-root .
+```
 
 ### Python package
 
 ```bash
 pip install skills-evolution
-```
-
-Entry points: `skills-evolution`, `skills-evolution-health`, `skills-evolution-ai-update`, `skills-evolution-mcp`, `skills-evolution-semantic-pass`.
-
-Run from source:
-
-```bash
-PYTHONPATH=src python3 -m skills_evolution.cli --help
 PYTHONPATH=src python3 -m skills_evolution.health --help
 ```
-
-### CLI: Record skill usage traces
-
-Track which skill sections an agent used while solving a task:
-
-```bash
-skills-evolution write \
-  --repo-root /path/to/repo \
-  --skill swiftui-standards \
-  --file .github/skills/swiftui-standards/references/state-management.md \
-  --section-id tca-store-ownership \
-  --line-start 1 --line-end 34 \
-  --reason "Used ownership rule for StoreOf wrapper choice" \
-  --confidence 0.86
-
-# Publish traces to the current branch's PR
-skills-evolution publish --repo-root /path/to/repo
-```
-
-### CLI: Health and audit toolkit
-
-```bash
-# Structural audit (validates frontmatter, checks links)
-skills-evolution-health audit --repo-root . --output-dir outputs
-
-# Collect PR feedback signals from recent PRs
-skills-evolution-health collect-feedback \
-  --repo owner/repo --token "$GH_TOKEN" --output outputs/raw.json
-
-# Analyze feedback into actionable proposals
-skills-evolution-health feedback \
-  --repo-root . --raw outputs/raw.json --output-dir outputs
-
-# Combine all reports into a summary (pass --evolution-num to add the evolution badge)
-skills-evolution-health combine --output-dir outputs --evolution-num 7
-```
-
-### MCP server
-
-Expose skill tracing as a Model Context Protocol server for Claude:
-
-```bash
-skills-evolution-mcp
-```
-
-Provides: `record_skill_trace`, `publish_skill_traces_to_pr`.
-
-### Optional: AI semantic review pass
-
-Run an additional semantic analysis pass over your skills:
-
-```bash
-skills-evolution-semantic-pass \
-  --repo-root . \
-  --output-dir outputs \
-  --copilot-token "$COPILOT_TOKEN"
-```
-
----
-
-## Evolution badge
-
-When `enable_ai_skill_update: true` and the workflow opens a PR, the PR description includes an **evolution badge** — a live shields.io badge that tracks how many times the skill has been automatically updated. After the PR is merged, the badge is committed to the skill's `README.md`.
-
-Each badge links to the merged PRs list so reviewers can see the full history at a glance.
-
-### Stage progression
-
-| # | Badge | Stage | Color |
-|---|-------|-------|-------|
-| 1 | 🦠 | **newborn** — first evolution | blue |
-| 2–5 | 🐛 | **evolving** — finding its shape | green |
-| 6–15 | 🦎 | **thriving** — actively maintained | yellow |
-| 16–30 | 🧠 | **sentient** — seriously battle-tested | orange |
-| 31+ | 🤖 | **legendary** — can probably maintain itself | blueviolet |
-
-Example badge after 7 evolutions:
-
-[![Skill evolved 7×](https://img.shields.io/badge/evolved-7%C3%97_thriving-yellow?style=flat-square&logo=dna&logoColor=white)](#)
 
 ---
 
 ## Showcase
 
-Standalone skill repositories maintained by skills-evolution:
-
-| Skill | What it covers | Repository |
-|-------|---------------|-----------|
-| **swift-kmp** | KMP ↔ Swift bridge patterns — interactors, `SkieSwiftFlow` → `AsyncStream`, type mapping, `KotlinThrowable` containment | [sorunokoe/swift-kmp-skill](https://github.com/sorunokoe/swift-kmp-skill) |
-| **swiftui-compose** | Bidirectional Compose Multiplatform ↔ SwiftUI interop — `UIViewControllerRepresentable`, coordinator, state sharing | [sorunokoe/swiftui-compose-skill](https://github.com/sorunokoe/swiftui-compose-skill) |
-
-**Maintaining a published skill?** Add the `maintained by skills-evolution` badge and workflows — see [Setup for standalone skill repos](#setup-for-standalone-skill-repos) above.
+| Skill | What it covers | Repo |
+|-------|---------------|------|
+| **swift-kmp** | KMP ↔ Swift bridge patterns, `SkieSwiftFlow` → `AsyncStream`, type mapping | [sorunokoe/swift-kmp-skill](https://github.com/sorunokoe/swift-kmp-skill) |
+| **swiftui-compose** | Compose Multiplatform ↔ SwiftUI interop, `UIViewControllerRepresentable`, coordinator | [sorunokoe/swiftui-compose-skill](https://github.com/sorunokoe/swiftui-compose-skill) |
 
 ---
 
 ## Contributing
 
-Open an issue or pull request. Tests live in `tests/` — run with `python3 -m pytest tests/`.
+Open an issue or PR. Tests: `python3 -m pytest tests/`.
 
 ## License
 
