@@ -111,6 +111,18 @@ jobs:
 The workflow audits `SKILL.md` and `references/*.md`, optionally patches version references
 via GitHub Models, and opens a PR if any changes are needed.
 
+### PR check for skill PRs
+
+Copy [`workflows/oss-skill-pr-check.md`](workflows/oss-skill-pr-check.md) into your skill repo
+and install it with `gh aw add`:
+
+```bash
+gh aw add oss-skill-pr-check
+```
+
+This triggers on PRs that change `SKILL.md` or `references/**` and posts a concise AI review
+comment covering accuracy, clarity, scope, and anti-pattern coverage.
+
 ### gh-aw agentic workflow
 
 Copy [`workflows/oss-skill-update.md`](workflows/oss-skill-update.md) into your skill repo
