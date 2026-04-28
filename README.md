@@ -194,14 +194,14 @@ That keeps `skills-evolution` as the single source of truth for:
 
 If a repository currently carries local copies of the transport scripts, treat them as transitional test glue and delete them once the published package/action is available.
 
-## Smoke test against GolfApp
+## Smoke test
 
 ```bash
 PYTHONPATH=src python3 -m skills_evolution.cli write \
   --repo-root /path/to/your/repo \
-  --skill swiftui-standards \
-  --file .github/skills/swiftui-standards/references/state-management.md \
-  --section-id tca-store-ownership \
+  --skill my-skill \
+  --file .github/skills/my-skill/SKILL.md \
+  --section-id section-id \
   --line-start 1 \
   --line-end 5 \
   --reason "Smoke test"

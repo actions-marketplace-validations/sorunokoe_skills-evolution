@@ -1,8 +1,7 @@
 """AI-powered skill updater.
 
-Discovers library versions from common package manager files (SPM, Go, Cargo, Flutter, npm),
-compares with latest GitHub releases, and applies conservative inline patches to skill files
-via GitHub Models API.
+Discovers library versions from common package manager files, compares with latest GitHub releases,
+and applies conservative inline patches to skill files via GitHub Models API.
 """
 from __future__ import annotations
 
@@ -39,7 +38,7 @@ def _extract_github_repo(url: str) -> tuple[str, str] | None:
 
 
 def _find_spm_deps(repo_root: Path) -> list[dict[str, str]]:
-	"""SPM: Package.resolved (v2 and v3 formats)."""
+	"""Package.resolved format (v2 and v3)."""
 	deps = []
 	for resolved in sorted(repo_root.rglob("Package.resolved")):
 		if ".build" in resolved.parts:
@@ -105,7 +104,7 @@ def _find_cargo_deps(repo_root: Path) -> list[dict[str, str]]:
 
 
 def _find_pubspec_deps(repo_root: Path) -> list[dict[str, str]]:
-	"""Flutter/Dart: pubspec.yaml — git dependencies with GitHub URLs."""
+	"""pubspec.yaml: git dependencies with GitHub URLs."""
 	deps = []
 	_git_url_re = re.compile(r"url:\s*(https://github\.com/[^\s]+)")
 	_ref_re = re.compile(r"ref:\s*([^\s]+)")
@@ -150,8 +149,6 @@ def _find_npm_deps(repo_root: Path) -> list[dict[str, str]]:
 def discover_deps(repo_root: Path) -> list[dict[str, str]]:
 	"""Discover GitHub-hosted dependencies from all supported package manager files.
 
-	Supports: SPM (Package.resolved), Go (go.mod), Rust (Cargo.lock),
-	Flutter (pubspec.yaml), and npm/yarn (package.json github: refs).
 	Deduplicates by GitHub repo slug — first occurrence wins.
 	"""
 	seen: set[str] = set()

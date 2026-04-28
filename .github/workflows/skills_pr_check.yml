@@ -9,7 +9,7 @@ on:
         default: "main"
         type: string
       tech_stack:
-        description: "Optional: tech stack context for the Copilot review (e.g. 'Swift 6, TCA, SwiftUI'). Leave empty for a generic review."
+        description: "Optional: tech stack context for the Copilot review (e.g. 'React 18, TypeScript 5'). Leave empty for a generic review."
         required: false
         default: ""
         type: string
