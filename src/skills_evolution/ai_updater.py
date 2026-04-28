@@ -1,7 +1,8 @@
 """AI-powered skill updater.
 
-Discovers library versions from Package.resolved, compares with latest GitHub releases,
-and applies conservative inline patches to skill files via GitHub Models API.
+Discovers library versions from common package manager files (SPM, Go, Cargo, Flutter, npm),
+compares with latest GitHub releases, and applies conservative inline patches to skill files
+via GitHub Models API.
 """
 from __future__ import annotations
 
@@ -28,9 +29,18 @@ _MAX_CONTENT = 6000
 # --- Dependency discovery ---
 
 
-def discover_deps(repo_root: Path) -> list[dict[str, str]]:
-	"""Read Package.resolved files (excluding .build/) to find GitHub-hosted dependencies."""
-	deps: list[dict[str, str]] = []
+def _extract_github_repo(url: str) -> tuple[str, str] | None:
+	"""Return (owner/name, name) from a GitHub URL/ref, or None if not a GitHub URL."""
+	if "github.com" not in url:
+		return None
+	slug = url.split("github.com/")[-1].removesuffix(".git").rstrip("/")
+	parts = slug.split("/")
+	return (f"{parts[0]}/{parts[1]}", parts[-1]) if len(parts) >= 2 else None
+
+
+def _find_spm_deps(repo_root: Path) -> list[dict[str, str]]:
+	"""SPM: Package.resolved (v2 and v3 formats)."""
+	deps = []
 	for resolved in sorted(repo_root.rglob("Package.resolved")):
 		if ".build" in resolved.parts:
 			continue
@@ -39,18 +49,124 @@ def discover_deps(repo_root: Path) -> list[dict[str, str]]:
 			pins = data.get("pins") or data.get("object", {}).get("pins", [])
 			for pin in pins:
 				url = (pin.get("location") or pin.get("repositoryURL", "")).rstrip("/")
-				if "github.com" not in url:
-					continue
-				parts = url.split("github.com/")[-1].removesuffix(".git").split("/")
-				if len(parts) >= 2:
-					deps.append({
-						"alias": pin.get("identity") or parts[-1],
-						"repo": f"{parts[0]}/{parts[1]}",
-						"pinned": (pin.get("state") or {}).get("version", ""),
-					})
+				result = _extract_github_repo(url)
+				if result:
+					repo, name = result
+					deps.append({"alias": pin.get("identity") or name, "repo": repo, "pinned": (pin.get("state") or {}).get("version", "")})
 		except Exception:
 			continue
 	return deps
+
+
+def _find_go_deps(repo_root: Path) -> list[dict[str, str]]:
+	"""Go modules: go.mod — module paths starting with github.com are GitHub repos."""
+	deps = []
+	_require_re = re.compile(r"^\s+(github\.com/[\w.\-]+/[\w.\-]+)\s+v([\w.\-]+)", re.MULTILINE)
+	for gomod in sorted(repo_root.rglob("go.mod")):
+		if ".build" in gomod.parts or "vendor" in gomod.parts:
+			continue
+		try:
+			for match in _require_re.finditer(gomod.read_text(encoding="utf-8")):
+				module, version = match.group(1), match.group(2)
+				parts = module.split("/")
+				deps.append({"alias": parts[-1], "repo": f"{parts[1]}/{parts[2]}", "pinned": f"v{version}"})
+		except Exception:
+			continue
+	return deps
+
+
+def _find_cargo_deps(repo_root: Path) -> list[dict[str, str]]:
+	"""Rust/Cargo: Cargo.lock — only git-sourced deps have GitHub URLs."""
+	deps = []
+	_source_re = re.compile(r'source\s*=\s*"git\+(https://github\.com/[^"?#]+)')
+	_name_re = re.compile(r'^name\s*=\s*"([^"]+)"', re.MULTILINE)
+	_ver_re = re.compile(r'^version\s*=\s*"([^"]+)"', re.MULTILINE)
+	for lock in sorted(repo_root.rglob("Cargo.lock")):
+		if "target" in lock.parts:
+			continue
+		try:
+			content = lock.read_text(encoding="utf-8")
+			for block in content.split("[[package]]"):
+				src = _source_re.search(block)
+				if not src:
+					continue
+				result = _extract_github_repo(src.group(1))
+				if not result:
+					continue
+				repo, _ = result
+				name = (_name_re.search(block) or ["", ""])[1] if _name_re.search(block) else ""
+				ver = (_ver_re.search(block) or ["", ""])[1] if _ver_re.search(block) else ""
+				nm = _name_re.search(block)
+				vr = _ver_re.search(block)
+				deps.append({"alias": nm.group(1) if nm else repo.split("/")[-1], "repo": repo, "pinned": vr.group(1) if vr else ""})
+		except Exception:
+			continue
+	return deps
+
+
+def _find_pubspec_deps(repo_root: Path) -> list[dict[str, str]]:
+	"""Flutter/Dart: pubspec.yaml — git dependencies with GitHub URLs."""
+	deps = []
+	_git_url_re = re.compile(r"url:\s*(https://github\.com/[^\s]+)")
+	_ref_re = re.compile(r"ref:\s*([^\s]+)")
+	_name_re = re.compile(r"^(\w[\w_-]*):\s*$", re.MULTILINE)
+	for pubspec in sorted(repo_root.rglob("pubspec.yaml")):
+		try:
+			content = pubspec.read_text(encoding="utf-8")
+			for url_match in _git_url_re.finditer(content):
+				result = _extract_github_repo(url_match.group(1))
+				if not result:
+					continue
+				repo, name = result
+				before = content[: url_match.start()]
+				ref_match = _ref_re.search(content, url_match.end(), url_match.end() + 100)
+				deps.append({"alias": name, "repo": repo, "pinned": ref_match.group(1) if ref_match else ""})
+		except Exception:
+			continue
+	return deps
+
+
+def _find_npm_deps(repo_root: Path) -> list[dict[str, str]]:
+	"""npm: package.json — dependencies with 'github:owner/repo' or full GitHub URL."""
+	deps = []
+	_github_ref_re = re.compile(r"github:([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)(?:#(.+))?")
+	for pkgjson in sorted(repo_root.rglob("package.json")):
+		if "node_modules" in pkgjson.parts:
+			continue
+		try:
+			data = json.loads(pkgjson.read_text(encoding="utf-8"))
+			all_deps = {**data.get("dependencies", {}), **data.get("devDependencies", {})}
+			for name, spec in all_deps.items():
+				m = _github_ref_re.match(str(spec))
+				if m:
+					repo = m.group(1)
+					ref = m.group(2) or ""
+					deps.append({"alias": name, "repo": repo, "pinned": ref})
+		except Exception:
+			continue
+	return deps
+
+
+def discover_deps(repo_root: Path) -> list[dict[str, str]]:
+	"""Discover GitHub-hosted dependencies from all supported package manager files.
+
+	Supports: SPM (Package.resolved), Go (go.mod), Rust (Cargo.lock),
+	Flutter (pubspec.yaml), and npm/yarn (package.json github: refs).
+	Deduplicates by GitHub repo slug — first occurrence wins.
+	"""
+	seen: set[str] = set()
+	result: list[dict[str, str]] = []
+	for dep in (
+		_find_spm_deps(repo_root)
+		+ _find_go_deps(repo_root)
+		+ _find_cargo_deps(repo_root)
+		+ _find_pubspec_deps(repo_root)
+		+ _find_npm_deps(repo_root)
+	):
+		if dep["repo"] not in seen:
+			seen.add(dep["repo"])
+			result.append(dep)
+	return result
 
 
 # --- GitHub API helpers ---

@@ -31,8 +31,9 @@ on:
         required: false
         type: string
         default: ""
-        # JSON array of {alias, repo} objects to track. Defaults to TCA, FactoryKit, Tuist,
-        # swift-navigation, Kotlin, Compose Multiplatform, Circuit, kotlin-inject.
+        # JSON array of {alias, repo} objects to override auto-discovered deps.
+        # By default, deps are discovered automatically from Package.resolved, go.mod,
+        # Cargo.lock, pubspec.yaml, and package.json files in the repository.
       max_skills:
         required: false
         type: string

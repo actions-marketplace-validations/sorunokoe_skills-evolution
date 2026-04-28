@@ -160,6 +160,54 @@ class DiscoverDepsTests(unittest.TestCase):
 			deps = ai_updater.discover_deps(repo_root)
 			self.assertEqual(deps, [])
 
+	def test_parses_go_mod(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			repo_root = Path(tmp)
+			(repo_root / "go.mod").write_text(
+				"module github.com/myorg/myapp\n\ngo 1.21\n\nrequire (\n"
+				"\tgithub.com/gin-gonic/gin v1.9.1\n"
+				"\tgithub.com/stretchr/testify v1.8.4 // indirect\n"
+				")\n"
+			)
+			deps = ai_updater.discover_deps(repo_root)
+			repos = [d["repo"] for d in deps]
+			self.assertIn("gin-gonic/gin", repos)
+			self.assertIn("stretchr/testify", repos)
+			gin = next(d for d in deps if d["repo"] == "gin-gonic/gin")
+			self.assertEqual(gin["pinned"], "v1.9.1")
+
+	def test_parses_npm_github_ref(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			repo_root = Path(tmp)
+			(repo_root / "package.json").write_text(json.dumps({
+				"dependencies": {
+					"my-lib": "github:owner/my-lib#v2.0.0",
+					"react": "^18.2.0",
+				}
+			}))
+			deps = ai_updater.discover_deps(repo_root)
+			self.assertEqual(len(deps), 1)
+			self.assertEqual(deps[0]["repo"], "owner/my-lib")
+			self.assertEqual(deps[0]["pinned"], "v2.0.0")
+
+	def test_deduplicates_across_ecosystems(self) -> None:
+		"""Same GitHub repo referenced in two files → appears once."""
+		with tempfile.TemporaryDirectory() as tmp:
+			repo_root = Path(tmp)
+			# SPM reference
+			resolved = {
+				"pins": [{"identity": "gin", "location": "https://github.com/gin-gonic/gin", "state": {"version": "1.9.1"}}],
+				"version": 3,
+			}
+			(repo_root / "Package.resolved").write_text(json.dumps(resolved))
+			# npm reference to same repo
+			(repo_root / "package.json").write_text(json.dumps({
+				"dependencies": {"gin": "github:gin-gonic/gin#v1.9.1"}
+			}))
+			deps = ai_updater.discover_deps(repo_root)
+			repos = [d["repo"] for d in deps]
+			self.assertEqual(repos.count("gin-gonic/gin"), 1)
+
 
 class WriteReportTests(unittest.TestCase):
 	def test_no_patches_says_up_to_date(self) -> None:

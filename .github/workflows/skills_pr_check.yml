@@ -8,6 +8,11 @@ on:
         required: false
         default: "main"
         type: string
+      tech_stack:
+        description: "Optional: tech stack context for the Copilot review (e.g. 'Swift 6, TCA, SwiftUI'). Leave empty for a generic review."
+        required: false
+        default: ""
+        type: string
     secrets:
       copilot_token:
         description: "GitHub Copilot token (COPILOT_TOKEN)"
@@ -22,7 +27,7 @@ jobs:
     name: Skill file review
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.actor != 'trackman-renovate[bot]' && github.actor != 'trackman-bot[bot]'
+    if: "!contains(github.actor, '[bot]')"
 
     steps:
       - name: Checkout repository
@@ -85,6 +90,7 @@ jobs:
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.copilot_token }}
           CHANGED_FILES: ${{ steps.changed.outputs.files }}
+          TECH_STACK: ${{ inputs.tech_stack }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # Build context: list changed files and their content
@@ -100,7 +106,13 @@ jobs:
             fi
           done
 
-          PROMPT="You are reviewing skill guidance files for a software team using Swift 6.2, SwiftUI, TCA, Kotlin Multiplatform, and Jetpack Compose.
+          if [ -n "$TECH_STACK" ]; then
+            STACK_LINE="The project uses: $TECH_STACK."
+          else
+            STACK_LINE="The project tech stack is not specified — review for general best practices."
+          fi
+
+          PROMPT="You are reviewing skill guidance files for a software team. $STACK_LINE
 
           Review the following changed skill file(s) for:
           1. Accuracy — does the guidance reflect current library best practices?
